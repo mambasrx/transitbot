@@ -39,4 +39,14 @@ def parse_gtfs():
         ]
 
         if upcoming_trains.empty:
-            print("🚆 No upcoming departures in the next
+            print("🚆 No upcoming departures in the next 90 minutes.")
+        else:
+            print("🚆 Upcoming Train Departures:")
+            print(upcoming_trains[["trip_id", "departure_time"]])
+
+    except Exception as e:
+        print(f"❌ Error parsing GTFS data: {e}")
+
+if __name__ == "__main__":
+    fetch_gtfs()
+    parse_gtfs()
