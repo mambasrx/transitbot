@@ -1,0 +1,28 @@
+name: GO Transit Mastodon Bot
+
+on:
+  schedule:
+    - cron: "0 * * * *"  # Runs every hour
+  workflow_dispatch:  # Allows manual triggering
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🛠 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Set Up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: 📦 Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: 🚆 Run Bot
+        env:
+          MASTODON_ACCESS_TOKEN: ${{ secrets.MASTODON_ACCESS_TOKEN }}
+          MASTODON_API_BASE_URL: ${{ secrets.MASTODON_API_BASE_URL }}
+        run: python bot.py
