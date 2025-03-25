@@ -1,97 +1,73 @@
 import os
 import requests
 import zipfile
-import yaml
+import io
 import pandas as pd
-from mastodon import Mastodon
 from datetime import datetime, timedelta
-import pytz
+from mastodon import Mastodon
 
-# Load configuration
-with open("config.yaml", "r") as config_file:
-    config = yaml.safe_load(config_file)
+# Load credentials from GitHub Secrets (set in Actions environment)
+MASTODON_ACCESS_TOKEN = os.getenv("MASTODON_ACCESS_TOKEN")
+MASTODON_API_BASE_URL = os.getenv("MASTODON_API_BASE_URL")
 
-# Mastodon API setup
-mastodon = Mastodon(
-    access_token=config["mastodon"]["access_token"],
-    api_base_url=config["mastodon"]["api_base_url"]
-)
-
-# GTFS static data file location
 GTFS_URL = "https://assets.metrolinx.com/raw/upload/Documents/Metrolinx/Open%20Data/GO-GTFS.zip"
+GTFS_FOLDER = "gtfs_data"
+
+# Ensure API credentials exist
+if not MASTODON_ACCESS_TOKEN or not MASTODON_API_BASE_URL:
+    raise Exception("❌ Mastodon API credentials are missing! Ensure secrets are set in GitHub Actions.")
 
 def fetch_gtfs():
-    """Download and extract GTFS data."""
-    zip_path = "go_gtfs.zip"
-    extract_path = "gtfs_data"
+    """Downloads and extracts GTFS data."""
+    print(f"🔄 Fetching GTFS data from: {GTFS_URL}")
+    response = requests.get(GTFS_URL)
+    if response.status_code != 200:
+        raise Exception("❌ Failed to download GTFS data.")
 
-    print("🔄 Fetching GTFS data from:", GTFS_URL)
-
-    try:
-        response = requests.get(GTFS_URL, stream=True)
-        if response.status_code == 200:
-            with open(zip_path, "wb") as f:
-                f.write(response.content)
-            print("✅ GTFS data downloaded successfully.")
-
-            # Extract the ZIP file
-            os.makedirs(extract_path, exist_ok=True)
-            with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                zip_ref.extractall(extract_path)
-            print("✅ GTFS data extracted successfully.")
-        else:
-            print(f"❌ HTTP Error: {response.status_code}")
-            print("⚠️ Full response text:", response.text)
-            raise Exception("Failed to download GTFS data.")
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Network error: {e}")
-        raise Exception("Network error while downloading GTFS data.")
+    with zipfile.ZipFile(io.BytesIO(response.content), "r") as zip_ref:
+        zip_ref.extractall(GTFS_FOLDER)
+    
+    print("✅ GTFS data extracted successfully.")
 
 def parse_gtfs():
-    """Parse GTFS schedule data for the next 90 minutes."""
-    fetch_gtfs()  # Ensure GTFS is downloaded & extracted
-    
-    stop_times_path = "gtfs_data/stop_times.txt"
+    """Parses GTFS data and retrieves upcoming departures within 90 minutes."""
+    stop_times_path = os.path.join(GTFS_FOLDER, "stop_times.txt")
     if not os.path.exists(stop_times_path):
-        raise FileNotFoundError(f"❌ GTFS file not found: {stop_times_path}")
+        raise FileNotFoundError("❌ stop_times.txt not found. Ensure GTFS data is downloaded.")
 
-    # Load GTFS stop_times.txt with dtype and specify datetime parsing format
-    stop_times_df = pd.read_csv(stop_times_path, dtype={'departure_time': str}, low_memory=False)
-    print("✅ Successfully loaded GTFS stop_times.txt")
+    stop_times_df = pd.read_csv(stop_times_path, dtype=str)
+    stop_times_df["departure_time"] = pd.to_datetime(stop_times_df["departure_time"], errors="coerce")
 
-    # Convert departure_time to datetime (timezone-naive initially)
-    stop_times_df["departure_time"] = pd.to_datetime(stop_times_df["departure_time"], errors="coerce", format='%H:%M:%S')
+    now = datetime.now()
+    next_90_min = now + timedelta(minutes=90)
 
-    # Now set the timezone for 'departure_time' to 'America/Toronto'
-    tz = pytz.timezone("America/Toronto")
-    stop_times_df["departure_time"] = stop_times_df["departure_time"].apply(
-        lambda x: x.replace(tzinfo=tz) if pd.notnull(x) else x
-    )
-
-    # Get the current time in 'America/Toronto' timezone
-    now = datetime.now(tz)
-
-    # Set a 90-minute window from now
-    time_window = now + timedelta(minutes=90)
-    
-    # Filter stop_times_df for upcoming train departures
-    upcoming_trains = stop_times_df[
-        (stop_times_df["departure_time"] >= now) & 
-        (stop_times_df["departure_time"] <= time_window)
+    # Convert timezone-naive datetime to string for comparison
+    filtered_trains = stop_times_df[
+        (stop_times_df["departure_time"] >= now.strftime('%H:%M:%S')) &
+        (stop_times_df["departure_time"] <= next_90_min.strftime('%H:%M:%S'))
     ]
 
-    if upcoming_trains.empty:
-        return "No upcoming departures in the next 90 minutes."
-    
-    return upcoming_trains[["trip_id", "departure_time"]].to_string(index=False)
+    return filtered_trains
 
 def post_to_mastodon():
-    """Post train schedule updates to Mastodon."""
+    """Posts train schedule updates to Mastodon."""
+    mastodon = Mastodon(
+        access_token=MASTODON_ACCESS_TOKEN,
+        api_base_url=MASTODON_API_BASE_URL
+    )
+
+    fetch_gtfs()
     train_schedule = parse_gtfs()
-    message = f"🚆 Upcoming GO Train Departures (Next 90 min):\n\n{train_schedule}"
-    
+
+    if train_schedule.empty:
+        message = "🚆 No upcoming GO Train departures in the next 90 minutes."
+    else:
+        message = "🚆 Upcoming GO Train departures in the next 90 minutes:\n"
+        for _, row in train_schedule.iterrows():
+            message += f"➡️ Train at {row['departure_time']} from stop {row['stop_id']}\n"
+
+    print("✅ Posting to Mastodon...")
     mastodon.status_post(message)
-    print("✅ Posted to Mastodon:", message)
 
 if __name__ == "__main__":
     post_to_mastodon()
