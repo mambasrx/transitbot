@@ -59,11 +59,22 @@ def parse_gtfs():
     stop_times_df = pd.read_csv(stop_times_path)
     print("✅ Successfully loaded GTFS stop_times.txt")
 
-    # Convert departure_time to datetime
-    now = datetime.now(pytz.timezone("America/Toronto"))
+    # Convert departure_time to datetime (timezone-naive initially)
+    stop_times_df["departure_time"] = pd.to_datetime(stop_times_df["departure_time"], errors="coerce")
+
+    # Now set the timezone for 'departure_time' to 'America/Toronto'
+    tz = pytz.timezone("America/Toronto")
+    stop_times_df["departure_time"] = stop_times_df["departure_time"].apply(
+        lambda x: x.replace(tzinfo=tz) if pd.notnull(x) else x
+    )
+
+    # Get the current time in 'America/Toronto' timezone
+    now = datetime.now(tz)
+
+    # Set a 90-minute window from now
     time_window = now + timedelta(minutes=90)
     
-    stop_times_df["departure_time"] = pd.to_datetime(stop_times_df["departure_time"], errors="coerce")
+    # Filter stop_times_df for upcoming train departures
     upcoming_trains = stop_times_df[
         (stop_times_df["departure_time"] >= now) & 
         (stop_times_df["departure_time"] <= time_window)
@@ -73,6 +84,7 @@ def parse_gtfs():
         return "No upcoming departures in the next 90 minutes."
     
     return upcoming_trains[["trip_id", "departure_time"]].to_string(index=False)
+
 
 def post_to_mastodon():
     """Post train schedule updates to Mastodon."""
