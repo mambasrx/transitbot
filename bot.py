@@ -55,12 +55,12 @@ def parse_gtfs():
     if not os.path.exists(stop_times_path):
         raise FileNotFoundError(f"❌ GTFS file not found: {stop_times_path}")
 
-    # Load GTFS stop_times.txt
-    stop_times_df = pd.read_csv(stop_times_path)
+    # Load GTFS stop_times.txt with dtype and specify datetime parsing format
+    stop_times_df = pd.read_csv(stop_times_path, dtype={'departure_time': str}, low_memory=False)
     print("✅ Successfully loaded GTFS stop_times.txt")
 
     # Convert departure_time to datetime (timezone-naive initially)
-    stop_times_df["departure_time"] = pd.to_datetime(stop_times_df["departure_time"], errors="coerce")
+    stop_times_df["departure_time"] = pd.to_datetime(stop_times_df["departure_time"], errors="coerce", format='%H:%M:%S')
 
     # Now set the timezone for 'departure_time' to 'America/Toronto'
     tz = pytz.timezone("America/Toronto")
@@ -84,7 +84,6 @@ def parse_gtfs():
         return "No upcoming departures in the next 90 minutes."
     
     return upcoming_trains[["trip_id", "departure_time"]].to_string(index=False)
-
 
 def post_to_mastodon():
     """Post train schedule updates to Mastodon."""
