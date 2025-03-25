@@ -21,3 +21,14 @@ Calling in the next 90mins...
 	09:30am Express
 	09:46am
 	09:55am
+
+# 🚆 Mastodon GO Train Bot  
+
+This bot posts the next 90 minutes of GO Train departures from Aldershot to Union and vice versa on Mastodon every hour.  
+
+## 🛠 Setup  
+
+1. Clone this repository:  
+   ```bash
+   git clone https://github.com/yourusername/mastodon-go-train-bot.git
+   cd mastodon-go-train-bot
