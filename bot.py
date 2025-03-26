@@ -1,93 +1,115 @@
 import os
 import requests
+import zipfile
 import pandas as pd
 from datetime import datetime, time
 
-# GTFS Data Source
+# GTFS Source URL
 GTFS_URL = "https://assets.metrolinx.com/raw/upload/Documents/Metrolinx/Open%20Data/GO-GTFS.zip"
-GTFS_DIR = "gtfs_data"
+GTFS_FOLDER = "gtfs_data"
 
-# Stop IDs
-ALDERSHOT_ID = "AL"
-UNION_ID = "UN"
+# Stop IDs for Aldershot and Union
+ALDERSHOT_STOP_ID = "AL"
+UNION_STOP_ID = "UN"
 
 def fetch_gtfs():
-    """Download and extract the latest GTFS data."""
-    zip_path = os.path.join(GTFS_DIR, "gtfs.zip")
-
-    # Ensure the GTFS directory exists
-    os.makedirs(GTFS_DIR, exist_ok=True)
+    """Fetch the latest GTFS data and extract it."""
+    os.makedirs(GTFS_FOLDER, exist_ok=True)
+    zip_path = os.path.join(GTFS_FOLDER, "gtfs.zip")
 
     print(f"🔄 Fetching GTFS data from: {GTFS_URL}")
     response = requests.get(GTFS_URL)
+    
     if response.status_code == 200:
         with open(zip_path, "wb") as f:
             f.write(response.content)
         print("✅ GTFS data downloaded successfully.")
-        os.system(f"unzip -o {zip_path} -d {GTFS_DIR}")
-        print("✅ GTFS data extracted successfully.")
     else:
-        raise Exception("❌ Failed to download GTFS data.")
+        print(f"❌ Failed to download GTFS data. HTTP {response.status_code}")
+        return
+
+    # Extract GTFS files
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(GTFS_FOLDER)
+    print("✅ GTFS data extracted successfully.")
+
+def fix_time_format(gtfs_time):
+    """Convert GTFS time format (which may include 24:xx:xx) to valid 0-23 hour time."""
+    try:
+        hours, minutes, seconds = map(int, gtfs_time.split(":"))
+        if hours >= 24:
+            hours -= 24
+        return time(hours, minutes, seconds)
+    except ValueError:
+        return None  # Handle potential bad data gracefully
 
 def parse_gtfs():
     """Extract upcoming GO Train departures between Aldershot and Union."""
-    stop_times_path = os.path.join(GTFS_DIR, "stop_times.txt")
+    stop_times_path = os.path.join(GTFS_FOLDER, "stop_times.txt")
 
     try:
         stop_times_df = pd.read_csv(stop_times_path, usecols=["trip_id", "departure_time", "stop_id", "stop_sequence"])
     except FileNotFoundError:
-        raise Exception("❌ stop_times.txt not found.")
-
-    # Convert departure_time to just a time (HH:MM:SS)
+        print("❌ stop_times.txt not found.")
+        return
+    
+    # Fix GTFS time formatting
     stop_times_df["departure_time"] = stop_times_df["departure_time"].astype(str).str.strip()
-    stop_times_df["departure_time"] = stop_times_df["departure_time"].apply(lambda x: time(*map(int, x.split(":"))))
+    stop_times_df["departure_time"] = stop_times_df["departure_time"].apply(fix_time_format)
+    stop_times_df = stop_times_df.dropna(subset=["departure_time"])  # Remove invalid times
 
-    # Current time
-    now = datetime.now().time()
+    # Read trips file to filter only valid train trips
+    trips_path = os.path.join(GTFS_FOLDER, "trips.txt")
+    trips_df = pd.read_csv(trips_path, usecols=["trip_id", "route_id"])
 
-    # Filter for Aldershot and Union stops
-    aldershot_stops = stop_times_df[stop_times_df["stop_id"] == ALDERSHOT_ID]
-    union_stops = stop_times_df[stop_times_df["stop_id"] == UNION_ID]
+    # Merge stop_times with trips to get route_id
+    stop_times_df = stop_times_df.merge(trips_df, on="trip_id")
 
-    # Merge on trip_id to find trips that include both stops
-    merged_trips = aldershot_stops.merge(union_stops, on="trip_id", suffixes=("_AL", "_UN"))
+    # Filter for trains that travel **Aldershot → Union**
+    al_to_un_trips = stop_times_df[
+        (stop_times_df["stop_id"] == ALDERSHOT_STOP_ID) |
+        (stop_times_df["stop_id"] == UNION_STOP_ID)
+    ].sort_values(["trip_id", "stop_sequence"])
 
-    # Ensure correct stop order (Aldershot → Union)
-    valid_trips = merged_trips[merged_trips["stop_sequence_AL"] < merged_trips["stop_sequence_UN"]]
+    al_to_un_trips = al_to_un_trips.groupby("trip_id").filter(
+        lambda g: (ALDERSHOT_STOP_ID in g["stop_id"].values) and (UNION_STOP_ID in g["stop_id"].values)
+    )
 
-    # Keep only future departures
-    valid_trips = valid_trips[valid_trips["departure_time_AL"] >= now]
-
-    # Sort by departure time
-    valid_trips = valid_trips.sort_values("departure_time_AL")
-
-    # Get next 3 departures Aldershot → Union
-    aldershot_to_union = valid_trips.head(3)[["departure_time_AL", "departure_time_UN"]]
-
-    # Get next 3 departures Union → Aldershot
-    union_to_aldershot = merged_trips[
-        (merged_trips["stop_sequence_UN"] < merged_trips["stop_sequence_AL"]) &
-        (merged_trips["departure_time_UN"] >= now)
-    ].sort_values("departure_time_UN").head(3)[["departure_time_UN", "departure_time_AL"]]
-
-    # Print results
+    # Extract departure times
+    departures = []
+    for trip_id, group in al_to_un_trips.groupby("trip_id"):
+        group = group.sort_values("stop_sequence")
+        if group.iloc[0]["stop_id"] == ALDERSHOT_STOP_ID and group.iloc[-1]["stop_id"] == UNION_STOP_ID:
+            departures.append((group.iloc[0]["departure_time"], group.iloc[-1]["departure_time"]))
+    
+    # Show next 3 trips
     print("\n🚆 Next 3 Departures: Aldershot → Union")
-    if aldershot_to_union.empty:
-        print("❌ No upcoming trips found.")
-    else:
-        print(aldershot_to_union.rename(columns={
-            "departure_time_AL": "Aldershot Departure",
-            "departure_time_UN": "Union Arrival"
-        }).to_string(index=False))
+    print(f"{'Aldershot Departure':<20} {'Union Arrival':<20}")
+    for dep, arr in departures[:3]:
+        print(f"{dep} {arr}")
 
+    # Filter for trains that travel **Union → Aldershot**
+    un_to_al_trips = stop_times_df[
+        (stop_times_df["stop_id"] == UNION_STOP_ID) |
+        (stop_times_df["stop_id"] == ALDERSHOT_STOP_ID)
+    ].sort_values(["trip_id", "stop_sequence"])
+
+    un_to_al_trips = un_to_al_trips.groupby("trip_id").filter(
+        lambda g: (UNION_STOP_ID in g["stop_id"].values) and (ALDERSHOT_STOP_ID in g["stop_id"].values)
+    )
+
+    # Extract return trips
+    return_trips = []
+    for trip_id, group in un_to_al_trips.groupby("trip_id"):
+        group = group.sort_values("stop_sequence")
+        if group.iloc[0]["stop_id"] == UNION_STOP_ID and group.iloc[-1]["stop_id"] == ALDERSHOT_STOP_ID:
+            return_trips.append((group.iloc[0]["departure_time"], group.iloc[-1]["departure_time"]))
+
+    # Show next 3 return trips
     print("\n🚆 Next 3 Departures: Union → Aldershot")
-    if union_to_aldershot.empty:
-        print("❌ No upcoming trips found.")
-    else:
-        print(union_to_aldershot.rename(columns={
-            "departure_time_UN": "Union Departure",
-            "departure_time_AL": "Aldershot Arrival"
-        }).to_string(index=False))
+    print(f"{'Union Departure':<20} {'Aldershot Arrival':<20}")
+    for dep, arr in return_trips[:3]:
+        print(f"{dep} {arr}")
 
 def main():
     fetch_gtfs()
