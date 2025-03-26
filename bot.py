@@ -34,22 +34,24 @@ def fetch_gtfs():
     print("✅ GTFS data extracted successfully.")
 
 def fix_time_format(gtfs_time):
-    """Convert GTFS time format (which may include 24:xx:xx) to valid 0-23 hour time."""
+    """Convert GTFS time format to a valid datetime.time object."""
     try:
         hours, minutes, seconds = map(int, gtfs_time.split(":"))
         if hours >= 24:
-            hours -= 24
+            hours -= 24  # Adjust for GTFS extended hour format
         return time(hours, minutes, seconds)
     except ValueError:
         return None  # Handle potential bad data gracefully
 
 def get_upcoming_trips(stop_times_df, direction):
     """
-    Extracts the next 3 train departures for a given direction.
+    Extracts the next 3 train departures **from the current time** for a given direction.
     :param stop_times_df: DataFrame with stop times.
     :param direction: "AL-UN" for Aldershot → Union, "UN-AL" for Union → Aldershot.
     :return: List of tuples containing departure and arrival times.
     """
+    current_time = datetime.now().time()  # Get the current system time
+
     if direction == "AL-UN":
         start_stop = ALDERSHOT_STOP_ID
         end_stop = UNION_STOP_ID
@@ -59,7 +61,7 @@ def get_upcoming_trips(stop_times_df, direction):
 
     # Filter trips that contain both the start and end stop
     relevant_trips = stop_times_df[stop_times_df["stop_id"].isin([start_stop, end_stop])]
-    
+
     # Group trips by trip_id
     trip_groups = relevant_trips.groupby("trip_id")
     valid_trips = []
@@ -67,9 +69,14 @@ def get_upcoming_trips(stop_times_df, direction):
     for trip_id, group in trip_groups:
         group = group.sort_values("stop_sequence")
 
-        # Check if the first stop in sequence is the correct starting stop
+        # Ensure the trip starts at the correct station and ends at the destination
         if group.iloc[0]["stop_id"] == start_stop and group.iloc[-1]["stop_id"] == end_stop:
-            valid_trips.append((group.iloc[0]["departure_time"], group.iloc[-1]["departure_time"]))
+            departure_time = group.iloc[0]["departure_time"]
+            arrival_time = group.iloc[-1]["departure_time"]
+
+            # Only consider upcoming trips
+            if departure_time > current_time:
+                valid_trips.append((departure_time, arrival_time))
 
     # Sort by departure time and return the next 3 trips
     valid_trips.sort()
