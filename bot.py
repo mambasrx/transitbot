@@ -15,6 +15,9 @@ def fetch_gtfs():
     """Download and extract the latest GTFS data."""
     zip_path = os.path.join(GTFS_DIR, "gtfs.zip")
 
+    # Ensure the GTFS directory exists
+    os.makedirs(GTFS_DIR, exist_ok=True)
+
     print(f"🔄 Fetching GTFS data from: {GTFS_URL}")
     response = requests.get(GTFS_URL)
     if response.status_code == 200:
