@@ -1,16 +1,13 @@
 import os
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, time
 
 # GTFS Data Source
 GTFS_URL = "https://assets.metrolinx.com/raw/upload/Documents/Metrolinx/Open%20Data/GO-GTFS.zip"
 GTFS_DIR = "gtfs_data"
 
-# Ensure GTFS directory exists
-os.makedirs(GTFS_DIR, exist_ok=True)
-
-# Aldershot and Union Stop IDs (Confirmed from stop_times.txt)
+# Stop IDs
 ALDERSHOT_ID = "AL"
 UNION_ID = "UN"
 
@@ -38,35 +35,36 @@ def parse_gtfs():
     except FileNotFoundError:
         raise Exception("❌ stop_times.txt not found.")
 
-    # Convert time columns
-    stop_times_df["departure_time"] = pd.to_datetime(stop_times_df["departure_time"], format="%H:%M:%S", errors="coerce")
+    # Convert departure_time to just a time (HH:MM:SS)
+    stop_times_df["departure_time"] = stop_times_df["departure_time"].astype(str).str.strip()
+    stop_times_df["departure_time"] = stop_times_df["departure_time"].apply(lambda x: time(*map(int, x.split(":"))))
 
-    # Current time in HH:MM:SS
+    # Current time
     now = datetime.now().time()
 
-    # Filter stops for Aldershot and Union
+    # Filter for Aldershot and Union stops
     aldershot_stops = stop_times_df[stop_times_df["stop_id"] == ALDERSHOT_ID]
     union_stops = stop_times_df[stop_times_df["stop_id"] == UNION_ID]
 
-    # Merge to find trips that include both stops
+    # Merge on trip_id to find trips that include both stops
     merged_trips = aldershot_stops.merge(union_stops, on="trip_id", suffixes=("_AL", "_UN"))
 
-    # Ensure correct stop order (Aldershot first, then Union)
+    # Ensure correct stop order (Aldershot → Union)
     valid_trips = merged_trips[merged_trips["stop_sequence_AL"] < merged_trips["stop_sequence_UN"]]
 
-    # Filter only future departures
-    valid_trips = valid_trips[valid_trips["departure_time_AL"].dt.time >= now]
+    # Keep only future departures
+    valid_trips = valid_trips[valid_trips["departure_time_AL"] >= now]
 
     # Sort by departure time
     valid_trips = valid_trips.sort_values("departure_time_AL")
 
-    # Get next 3 trips Aldershot → Union
+    # Get next 3 departures Aldershot → Union
     aldershot_to_union = valid_trips.head(3)[["departure_time_AL", "departure_time_UN"]]
 
-    # Get next 3 trips Union → Aldershot
+    # Get next 3 departures Union → Aldershot
     union_to_aldershot = merged_trips[
         (merged_trips["stop_sequence_UN"] < merged_trips["stop_sequence_AL"]) &
-        (merged_trips["departure_time_UN"].dt.time >= now)
+        (merged_trips["departure_time_UN"] >= now)
     ].sort_values("departure_time_UN").head(3)[["departure_time_UN", "departure_time_AL"]]
 
     # Print results
