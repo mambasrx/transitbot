@@ -35,14 +35,18 @@ def fetch_gtfs():
 
 def fix_time_format(gtfs_time):
     """Convert GTFS time (which can be over 24:00:00) into a valid datetime object."""
-    hours, minutes, seconds = map(int, gtfs_time.split(":"))
     today = datetime.today()
 
-    # GTFS times may exceed 24 hours (e.g. "26:15:00" -> 02:15:00 next day)
+    # Split the GTFS time (HH:MM:SS) into hours, minutes, and seconds
+    hours, minutes, seconds = map(int, gtfs_time.split(":"))
+    
+    # Handle cases where time exceeds 24 hours (e.g., 25:00:00 is the next day)
     if hours >= 24:
-        return datetime(today.year, today.month, today.day, hours - 24, minutes, seconds) + timedelta(days=1)
-    else:
-        return datetime(today.year, today.month, today.day, hours, minutes, seconds)
+        hours -= 24
+        today += timedelta(days=1)  # Increment day if time is past midnight
+
+    # Return the full datetime object
+    return datetime(today.year, today.month, today.day, hours, minutes, seconds)
 
 def get_upcoming_trips(stop_times_df, start_stop, end_stop):
     """
