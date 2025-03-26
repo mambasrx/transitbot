@@ -7,9 +7,9 @@ from datetime import datetime
 GTFS_URL = "https://assets.metrolinx.com/raw/upload/Documents/Metrolinx/Open%20Data/GO-GTFS.zip"
 GTFS_DIR = "gtfs_data"
 
-# GO Transit Stop IDs
-ALDERSHOT_STOP_ID = "AL"
-UNION_STOP_ID = "UN"
+# GO Transit Stop Names (based on stops.txt)
+ALDERSHOT_NAME = "Aldershot GO"
+UNION_NAME = "Union Station"
 
 # Ensure GTFS directory exists
 os.makedirs(GTFS_DIR, exist_ok=True)
@@ -29,14 +29,35 @@ def fetch_gtfs():
     else:
         raise Exception("❌ Failed to download GTFS data.")
 
+def get_stop_ids():
+    """Retrieve the correct stop IDs for Aldershot and Union from stops.txt."""
+    stops_path = os.path.join(GTFS_DIR, "stops.txt")
+
+    try:
+        stops_df = pd.read_csv(stops_path, usecols=["stop_id", "stop_name"])
+    except FileNotFoundError:
+        raise Exception("❌ stops.txt not found.")
+
+    aldershot_id = stops_df[stops_df["stop_name"].str.contains(ALDERSHOT_NAME, case=False, na=False)]["stop_id"].values
+    union_id = stops_df[stops_df["stop_name"].str.contains(UNION_NAME, case=False, na=False)]["stop_id"].values
+
+    if len(aldershot_id) == 0 or len(union_id) == 0:
+        raise Exception("❌ Could not find stop IDs for Aldershot or Union in stops.txt.")
+
+    return aldershot_id[0], union_id[0]
+
 def parse_gtfs():
-    """Extract upcoming GO Train departures from Aldershot → Union & Union → Aldershot."""
+    """Extract upcoming GO Train departures between Aldershot and Union."""
     stop_times_path = os.path.join(GTFS_DIR, "stop_times.txt")
 
     try:
         stop_times_df = pd.read_csv(stop_times_path, usecols=["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"])
     except FileNotFoundError:
-        raise Exception("❌ GTFS files not found. Ensure data is downloaded correctly.")
+        raise Exception("❌ stop_times.txt not found.")
+
+    # Get actual stop IDs from stops.txt
+    aldershot_id, union_id = get_stop_ids()
+    print(f"✅ Aldershot Stop ID: {aldershot_id}, Union Stop ID: {union_id}")
 
     # Convert time columns
     stop_times_df["departure_time"] = pd.to_datetime(stop_times_df["departure_time"], format="%H:%M:%S", errors="coerce")
@@ -44,26 +65,26 @@ def parse_gtfs():
     # Current time in HH:MM:SS
     now = datetime.now().strftime("%H:%M:%S")
 
-    # Filter for Aldershot and Union stops
-    aldershot_stops = stop_times_df[stop_times_df["stop_id"] == ALDERSHOT_STOP_ID]
-    union_stops = stop_times_df[stop_times_df["stop_id"] == UNION_STOP_ID]
+    # Filter stop times for Aldershot and Union
+    aldershot_stops = stop_times_df[stop_times_df["stop_id"] == aldershot_id]
+    union_stops = stop_times_df[stop_times_df["stop_id"] == union_id]
 
-    # Merge trips to find those with both Aldershot and Union
+    # Merge trips to find common ones
     merged_trips = aldershot_stops.merge(union_stops, on="trip_id", suffixes=("_AL", "_UN"))
 
-    # Ensure correct stop order (Aldershot comes before Union)
+    # Ensure correct stop order
     valid_trips = merged_trips[merged_trips["stop_sequence_AL"] < merged_trips["stop_sequence_UN"]]
 
-    # Filter only future departures
+    # Filter future departures
     valid_trips = valid_trips[valid_trips["departure_time_AL"] >= now]
 
     # Sort by departure time
     valid_trips = valid_trips.sort_values("departure_time_AL")
 
-    # Get next 3 departures for Aldershot → Union
+    # Get next 3 trips Aldershot → Union
     aldershot_to_union = valid_trips.head(3)[["departure_time_AL", "departure_time_UN"]]
 
-    # Get next 3 departures for Union → Aldershot (reversed order)
+    # Get next 3 trips Union → Aldershot
     union_to_aldershot = merged_trips[
         (merged_trips["stop_sequence_UN"] < merged_trips["stop_sequence_AL"]) &
         (merged_trips["departure_time_UN"] >= now)
