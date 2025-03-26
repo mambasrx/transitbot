@@ -2,7 +2,7 @@ import os
 import requests
 import zipfile
 import pandas as pd
-from datetime import datetime, time
+from datetime import datetime, timedelta
 
 # GTFS Source URL
 GTFS_URL = "https://assets.metrolinx.com/raw/upload/Documents/Metrolinx/Open%20Data/GO-GTFS.zip"
@@ -13,7 +13,7 @@ ALDERSHOT_STOP_ID = "AL"
 UNION_STOP_ID = "UN"
 
 def fetch_gtfs():
-    """Fetch the latest GTFS data and extract it."""
+    """Fetch and extract the latest GTFS data."""
     os.makedirs(GTFS_FOLDER, exist_ok=True)
     zip_path = os.path.join(GTFS_FOLDER, "gtfs.zip")
 
@@ -34,23 +34,27 @@ def fetch_gtfs():
     print("✅ GTFS data extracted successfully.")
 
 def fix_time_format(gtfs_time):
-    """Convert GTFS time format to a valid datetime.time object."""
+    """Convert GTFS time (which can be over 24:00:00) into a valid datetime object."""
     try:
         hours, minutes, seconds = map(int, gtfs_time.split(":"))
+        today = datetime.today()
+        
+        # GTFS times may exceed 24 hours (e.g. "26:15:00" -> 02:15:00 next day)
         if hours >= 24:
-            hours -= 24  # Adjust for GTFS extended hour format
-        return time(hours, minutes, seconds)
+            return datetime(today.year, today.month, today.day, hours - 24, minutes, seconds) + timedelta(days=1)
+        else:
+            return datetime(today.year, today.month, today.day, hours, minutes, seconds)
     except ValueError:
-        return None  # Handle potential bad data gracefully
+        return None  # Handle invalid times gracefully
 
 def get_upcoming_trips(stop_times_df, direction):
     """
-    Extracts the next 3 train departures **from the current time** for a given direction.
+    Extracts the next 3 train departures from **the current time** for a given direction.
     :param stop_times_df: DataFrame with stop times.
     :param direction: "AL-UN" for Aldershot → Union, "UN-AL" for Union → Aldershot.
     :return: List of tuples containing departure and arrival times.
     """
-    current_time = datetime.now().time()  # Get the current system time
+    current_time = datetime.now()  # Get current system time
 
     if direction == "AL-UN":
         start_stop = ALDERSHOT_STOP_ID
@@ -74,11 +78,11 @@ def get_upcoming_trips(stop_times_df, direction):
             departure_time = group.iloc[0]["departure_time"]
             arrival_time = group.iloc[-1]["departure_time"]
 
-            # Only consider upcoming trips
+            # Only consider **upcoming** trips
             if departure_time > current_time:
                 valid_trips.append((departure_time, arrival_time))
 
-    # Sort by departure time and return the next 3 trips
+    # Sort by departure time and return the next 3 upcoming trips
     valid_trips.sort()
     return valid_trips[:3]
 
@@ -112,12 +116,12 @@ def parse_gtfs():
     print("\n🚆 Next 3 Departures: Aldershot → Union")
     print(f"{'Aldershot Departure':<20} {'Union Arrival':<20}")
     for dep, arr in al_to_un_trips:
-        print(f"{dep} {arr}")
+        print(f"{dep.strftime('%H:%M:%S')} {arr.strftime('%H:%M:%S')}")
 
     print("\n🚆 Next 3 Departures: Union → Aldershot")
     print(f"{'Union Departure':<20} {'Aldershot Arrival':<20}")
     for dep, arr in un_to_al_trips:
-        print(f"{dep} {arr}")
+        print(f"{dep.strftime('%H:%M:%S')} {arr.strftime('%H:%M:%S')}")
 
 def main():
     fetch_gtfs()
