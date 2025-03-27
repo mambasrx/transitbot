@@ -73,8 +73,8 @@ def get_upcoming_trips(stop_times_df, start_stop, end_stop):
         end_row = group[group["stop_id"] == end_stop]
 
         if not start_row.empty and not end_row.empty:
-            departure_time = start_row["departure_time"].values[0]
-            arrival_time = end_row["departure_time"].values[0]
+            departure_time = fix_time_format(start_row["departure_time"].iloc[0])  # Convert to datetime
+            arrival_time = fix_time_format(end_row["departure_time"].iloc[0])  # Convert to datetime
 
             # Only consider **upcoming** trips
             if departure_time > current_time:
@@ -106,8 +106,6 @@ def parse_gtfs():
     
     # Fix GTFS time formatting
     stop_times_df["departure_time"] = stop_times_df["departure_time"].astype(str).str.strip()
-    stop_times_df["departure_time"] = stop_times_df["departure_time"].apply(fix_time_format)
-    stop_times_df = stop_times_df.dropna(subset=["departure_time"])  # Remove invalid times
 
     # Read trips file to filter only valid train trips
     trips_path = os.path.join(GTFS_FOLDER, "trips.txt")
