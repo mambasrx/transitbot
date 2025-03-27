@@ -47,9 +47,9 @@ def fix_time_format(gtfs_time):
 
     return datetime(today.year, today.month, today.day, hours, minutes, seconds)
 
-def get_next_trips(stop_times_df, start_stop, end_stop):
+def get_next_unique_trips(stop_times_df, start_stop, end_stop):
     """
-    Get the next 3 unique trips departing **after the current time**.
+    Get the next 3 **unique departure times** after the current time.
     :param stop_times_df: DataFrame with stop times.
     :param start_stop: Departure stop ID (AL or UN).
     :param end_stop: Arrival stop ID (UN or AL).
@@ -57,11 +57,11 @@ def get_next_trips(stop_times_df, start_stop, end_stop):
     """
     current_time = datetime.now()  # Get system's current time
 
-    # Filter only trips containing both start and end stop
+    # Filter only trips containing both start and end stops
     relevant_trips = stop_times_df[stop_times_df["stop_id"].isin([start_stop, end_stop])]
 
     # Group by trip_id
-    trips_dict = {}
+    trips_list = []
     
     for trip_id, group in relevant_trips.groupby("trip_id"):
         group = group.sort_values("stop_sequence")
@@ -80,12 +80,21 @@ def get_next_trips(stop_times_df, start_stop, end_stop):
 
                 # Only add trips that **depart after the current time**
                 if departure_time > current_time:
-                    trips_dict[trip_id] = (trip_date, departure_time, arrival_time)
+                    trips_list.append((trip_id, trip_date, departure_time, arrival_time))
 
-    # Sort trips by departure time and get the next 3 **distinct** trips
-    sorted_trips = sorted(trips_dict.items(), key=lambda x: x[1][1])[:3]
+    # Sort trips by departure time and **keep only unique departure times**
+    seen_departure_times = set()
+    unique_trips = []
 
-    return [(trip_id, date, dep, arr) for trip_id, (date, dep, arr) in sorted_trips]
+    for trip in sorted(trips_list, key=lambda x: x[2]):  # Sort by departure time
+        if trip[2] not in seen_departure_times:
+            unique_trips.append(trip)
+            seen_departure_times.add(trip[2])
+
+        if len(unique_trips) == 3:  # Stop after 3 unique trips
+            break
+
+    return unique_trips
 
 def parse_gtfs():
     """Extract upcoming GO Train departures between Aldershot and Union."""
@@ -104,9 +113,9 @@ def parse_gtfs():
     # Merge stop_times with trips to get route_id
     stop_times_df = stop_times_df.merge(trips_df, on="trip_id")
 
-    # Get next 3 trips for each direction
-    al_to_un_trips = get_next_trips(stop_times_df, ALDERSHOT_STOP_ID, UNION_STOP_ID)
-    un_to_al_trips = get_next_trips(stop_times_df, UNION_STOP_ID, ALDERSHOT_STOP_ID)
+    # Get next 3 unique trips for each direction
+    al_to_un_trips = get_next_unique_trips(stop_times_df, ALDERSHOT_STOP_ID, UNION_STOP_ID)
+    un_to_al_trips = get_next_unique_trips(stop_times_df, UNION_STOP_ID, ALDERSHOT_STOP_ID)
 
     # Print the results
     print("\n🚆 Next 3 Departures: Aldershot → Union")
