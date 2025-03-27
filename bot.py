@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 GTFS_URL = "https://assets.metrolinx.com/raw/upload/Documents/Metrolinx/Open%20Data/GO-GTFS.zip"
 GTFS_FOLDER = "gtfs_data"
 
-# Stop IDs for Aldershot and Union
+# Stop IDs for Aldershot and Union (these must match GTFS data)
 ALDERSHOT_STOP_ID = "AL"
 UNION_STOP_ID = "UN"
 
@@ -33,29 +33,31 @@ def fetch_gtfs():
         zip_ref.extractall(GTFS_FOLDER)
     print("✅ GTFS data extracted successfully.")
 
-def fix_time_format(gtfs_time, trip_date):
-    """Convert GTFS time (HH:MM:SS) and date into a proper datetime object."""
+def convert_gtfs_time(gtfs_time, trip_date):
+    """
+    Convert GTFS time (HH:MM:SS) and trip date into a proper datetime object.
+    GTFS sometimes has hours over 24, which means the trip extends past midnight.
+    """
     hours, minutes, seconds = map(int, gtfs_time.split(":"))
-    date_obj = datetime.strptime(trip_date, "%Y-%m-%d")
+    trip_date_obj = datetime.strptime(trip_date, "%Y-%m-%d")
 
-    # Handle cases where the GTFS time exceeds 24 hours (next-day trips)
     if hours >= 24:
         hours -= 24
-        date_obj += timedelta(days=1)  # Increment day
+        trip_date_obj += timedelta(days=1)  # Move to the next day
 
-    return datetime(date_obj.year, date_obj.month, date_obj.day, hours, minutes, seconds)
+    return datetime(trip_date_obj.year, trip_date_obj.month, trip_date_obj.day, hours, minutes, seconds)
 
 def get_next_trips(stop_times_df, start_stop, end_stop):
     """
-    Get the next 3 unique departures **after the current time and date**.
+    Find the next 3 departures **from the current time**.
     """
     current_time = datetime.now()
-    today_str = current_time.strftime("%Y-%m-%d")  # Get today's date as a string
+    today_str = current_time.strftime("%Y-%m-%d")
+    tomorrow_str = (current_time + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # Filter only trips containing both start and end stops
+    # Filter for relevant stop times
     relevant_trips = stop_times_df[stop_times_df["stop_id"].isin([start_stop, end_stop])]
 
-    # Group by trip_id
     trips_list = []
     
     for trip_id, group in relevant_trips.groupby("trip_id"):
@@ -65,27 +67,25 @@ def get_next_trips(stop_times_df, start_stop, end_stop):
         end_row = group[group["stop_id"] == end_stop]
 
         if not start_row.empty and not end_row.empty:
-            departure_time = fix_time_format(start_row["departure_time"].iloc[0], today_str)
-            arrival_time = fix_time_format(end_row["departure_time"].iloc[0], today_str)
+            dep_time = convert_gtfs_time(start_row["departure_time"].iloc[0], today_str)
+            arr_time = convert_gtfs_time(end_row["departure_time"].iloc[0], today_str)
 
-            if departure_time < arrival_time:  # Valid trip
-                trips_list.append((trip_id, departure_time.date(), departure_time, arrival_time))
+            if dep_time < arr_time:  # Ensure valid trip direction
+                trips_list.append((trip_id, dep_time.date(), dep_time, arr_time))
 
     # Sort trips by departure time
     trips_list.sort(key=lambda x: x[2])
 
-    # Filter for only **today’s** upcoming trips
+    # Filter for **only upcoming** departures today
     upcoming_trips = [trip for trip in trips_list if trip[2] > current_time]
 
-    # If fewer than 3 trips remain today, add tomorrow's trips
+    # If fewer than 3 trips today, check tomorrow's schedule
     if len(upcoming_trips) < 3:
-        tomorrow_str = (current_time + timedelta(days=1)).strftime("%Y-%m-%d")
-
         for trip in trips_list:
-            if trip[1] == tomorrow_str and len(upcoming_trips) < 3:
+            if trip[1] == datetime.strptime(tomorrow_str, "%Y-%m-%d").date() and len(upcoming_trips) < 3:
                 upcoming_trips.append(trip)
 
-    return upcoming_trips[:3]  # Return only the next 3 trips
+    return upcoming_trips[:3]  # Limit to 3 results
 
 def parse_gtfs():
     """Extract upcoming GO Train departures between Aldershot and Union."""
