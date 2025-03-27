@@ -34,34 +34,33 @@ def fetch_gtfs():
     print("✅ GTFS data extracted successfully.")
 
 def fix_time_format(gtfs_time):
-    """Convert GTFS time (HH:MM:SS) into a valid datetime object."""
+    """Convert GTFS time (HH:MM:SS) into a proper datetime object."""
     today = datetime.today()
 
     # Split the GTFS time (HH:MM:SS) into hours, minutes, and seconds
     hours, minutes, seconds = map(int, gtfs_time.split(":"))
     
-    # Handle cases where time exceeds 24 hours (e.g., 25:00:00 is the next day)
+    # Handle cases where time exceeds 24 hours (next day trips)
     if hours >= 24:
         hours -= 24
-        today += timedelta(days=1)  # Increment day if time is past midnight
+        today += timedelta(days=1)  # Increment day
 
-    # Return the full datetime object
     return datetime(today.year, today.month, today.day, hours, minutes, seconds)
 
 def get_next_trips(stop_times_df, start_stop, end_stop):
     """
-    Get the next 3 trips departing **after the current time**.
+    Get the next 3 unique trips departing **after the current time**.
     :param stop_times_df: DataFrame with stop times.
     :param start_stop: Departure stop ID (AL or UN).
     :param end_stop: Arrival stop ID (UN or AL).
-    :return: List of tuples containing departure and arrival times.
+    :return: List of tuples containing trip_id, date, departure time, and arrival time.
     """
     current_time = datetime.now()  # Get system's current time
 
     # Filter only trips containing both start and end stop
     relevant_trips = stop_times_df[stop_times_df["stop_id"].isin([start_stop, end_stop])]
 
-    # Group trips by trip_id
+    # Group by trip_id
     trips_dict = {}
     
     for trip_id, group in relevant_trips.groupby("trip_id"):
@@ -75,14 +74,18 @@ def get_next_trips(stop_times_df, start_stop, end_stop):
             departure_time = fix_time_format(start_row["departure_time"].iloc[0])
             arrival_time = fix_time_format(end_row["departure_time"].iloc[0])
 
-            # Only add trips that **depart after the current time**
-            if departure_time > current_time:
-                trips_dict[trip_id] = (departure_time, arrival_time)
+            # Ensure it's a valid trip (departure before arrival)
+            if departure_time < arrival_time:
+                trip_date = departure_time.strftime('%Y-%m-%d')
 
-    # Sort trips by departure time and get the next 3
-    sorted_trips = sorted(trips_dict.values(), key=lambda x: x[0])[:3]
+                # Only add trips that **depart after the current time**
+                if departure_time > current_time:
+                    trips_dict[trip_id] = (trip_date, departure_time, arrival_time)
 
-    return sorted_trips
+    # Sort trips by departure time and get the next 3 **distinct** trips
+    sorted_trips = sorted(trips_dict.items(), key=lambda x: x[1][1])[:3]
+
+    return [(trip_id, date, dep, arr) for trip_id, (date, dep, arr) in sorted_trips]
 
 def parse_gtfs():
     """Extract upcoming GO Train departures between Aldershot and Union."""
@@ -107,14 +110,14 @@ def parse_gtfs():
 
     # Print the results
     print("\n🚆 Next 3 Departures: Aldershot → Union")
-    print(f"{'Aldershot Departure':<20} {'Union Arrival':<20}")
-    for dep, arr in al_to_un_trips:
-        print(f"{dep.strftime('%H:%M:%S')} {arr.strftime('%H:%M:%S')}")
+    print(f"{'Trip ID':<10} {'Date':<12} {'Aldershot Departure':<12} {'Union Arrival':<12}")
+    for trip_id, date, dep, arr in al_to_un_trips:
+        print(f"{trip_id:<10} {date:<12} {dep.strftime('%H:%M:%S'):<12} {arr.strftime('%H:%M:%S'):<12}")
 
     print("\n🚆 Next 3 Departures: Union → Aldershot")
-    print(f"{'Union Departure':<20} {'Aldershot Arrival':<20}")
-    for dep, arr in un_to_al_trips:
-        print(f"{dep.strftime('%H:%M:%S')} {arr.strftime('%H:%M:%S')}")
+    print(f"{'Trip ID':<10} {'Date':<12} {'Union Departure':<12} {'Aldershot Arrival':<12}")
+    for trip_id, date, dep, arr in un_to_al_trips:
+        print(f"{trip_id:<10} {date:<12} {dep.strftime('%H:%M:%S'):<12} {arr.strftime('%H:%M:%S'):<12}")
 
 def main():
     fetch_gtfs()
