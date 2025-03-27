@@ -34,7 +34,7 @@ def fetch_gtfs():
     print("✅ GTFS data extracted successfully.")
 
 def fix_time_format(gtfs_time):
-    """Convert GTFS time (which can be over 24:00:00) into a valid datetime object."""
+    """Convert GTFS time (HH:MM:SS) into a valid datetime object."""
     today = datetime.today()
 
     # Split the GTFS time (HH:MM:SS) into hours, minutes, and seconds
@@ -48,51 +48,41 @@ def fix_time_format(gtfs_time):
     # Return the full datetime object
     return datetime(today.year, today.month, today.day, hours, minutes, seconds)
 
-def get_upcoming_trips(stop_times_df, start_stop, end_stop):
+def get_next_trips(stop_times_df, start_stop, end_stop):
     """
-    Extracts the next 3 train departures from **the current time**.
+    Get the next 3 trips departing **after the current time**.
     :param stop_times_df: DataFrame with stop times.
-    :param start_stop: Starting stop ID (AL or UN).
-    :param end_stop: Ending stop ID (UN or AL).
+    :param start_stop: Departure stop ID (AL or UN).
+    :param end_stop: Arrival stop ID (UN or AL).
     :return: List of tuples containing departure and arrival times.
     """
-    current_time = datetime.now()  # Get current system time
+    current_time = datetime.now()  # Get system's current time
 
-    # Get trips that contain both the start and end stop
+    # Filter only trips containing both start and end stop
     relevant_trips = stop_times_df[stop_times_df["stop_id"].isin([start_stop, end_stop])]
 
     # Group trips by trip_id
-    trip_groups = relevant_trips.groupby("trip_id")
-    valid_trips = []
-
-    for trip_id, group in trip_groups:
+    trips_dict = {}
+    
+    for trip_id, group in relevant_trips.groupby("trip_id"):
         group = group.sort_values("stop_sequence")
 
-        # Ensure the trip starts at the correct station and ends at the destination
+        # Ensure trip contains both start and end stops
         start_row = group[group["stop_id"] == start_stop]
         end_row = group[group["stop_id"] == end_stop]
 
         if not start_row.empty and not end_row.empty:
-            departure_time = fix_time_format(start_row["departure_time"].iloc[0])  # Convert to datetime
-            arrival_time = fix_time_format(end_row["departure_time"].iloc[0])  # Convert to datetime
+            departure_time = fix_time_format(start_row["departure_time"].iloc[0])
+            arrival_time = fix_time_format(end_row["departure_time"].iloc[0])
 
-            # Only consider **upcoming** trips
+            # Only add trips that **depart after the current time**
             if departure_time > current_time:
-                valid_trips.append((departure_time, arrival_time, trip_id))  # Include trip_id to ensure uniqueness
+                trips_dict[trip_id] = (departure_time, arrival_time)
 
-    # Sort by departure time and return the next 3 **distinct** trips
-    valid_trips.sort()
-    unique_trips = []
-    seen_trip_ids = set()
+    # Sort trips by departure time and get the next 3
+    sorted_trips = sorted(trips_dict.values(), key=lambda x: x[0])[:3]
 
-    for dep, arr, trip_id in valid_trips:
-        if trip_id not in seen_trip_ids:
-            unique_trips.append((dep, arr))
-            seen_trip_ids.add(trip_id)
-        if len(unique_trips) == 3:
-            break  # Stop after getting 3 unique trips
-
-    return unique_trips
+    return sorted_trips
 
 def parse_gtfs():
     """Extract upcoming GO Train departures between Aldershot and Union."""
@@ -104,9 +94,6 @@ def parse_gtfs():
         print("❌ stop_times.txt not found.")
         return
     
-    # Fix GTFS time formatting
-    stop_times_df["departure_time"] = stop_times_df["departure_time"].astype(str).str.strip()
-
     # Read trips file to filter only valid train trips
     trips_path = os.path.join(GTFS_FOLDER, "trips.txt")
     trips_df = pd.read_csv(trips_path, usecols=["trip_id", "route_id"])
@@ -115,8 +102,8 @@ def parse_gtfs():
     stop_times_df = stop_times_df.merge(trips_df, on="trip_id")
 
     # Get next 3 trips for each direction
-    al_to_un_trips = get_upcoming_trips(stop_times_df, ALDERSHOT_STOP_ID, UNION_STOP_ID)
-    un_to_al_trips = get_upcoming_trips(stop_times_df, UNION_STOP_ID, ALDERSHOT_STOP_ID)
+    al_to_un_trips = get_next_trips(stop_times_df, ALDERSHOT_STOP_ID, UNION_STOP_ID)
+    un_to_al_trips = get_next_trips(stop_times_df, UNION_STOP_ID, ALDERSHOT_STOP_ID)
 
     # Print the results
     print("\n🚆 Next 3 Departures: Aldershot → Union")
